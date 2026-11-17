@@ -16,7 +16,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { MODEL, MODEL_VERSION, boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -32,6 +32,62 @@ function arg(name: string, fallback: string): string {
   if (at >= 0 && at + 1 < process.argv.length) return process.argv[at + 1]!;
   const withEquals = process.argv.find((a) => a.startsWith(`--${name}=`));
   return withEquals === undefined ? fallback : withEquals.slice(name.length + 3);
+}
+
+/** Whether the command line carries an exact flag, short or long. */
+function hasFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
+/** A dollar amount with thousands separators, for the run summary. */
+function formatUsd(value: number): string {
+  return `$${value.toLocaleString('en-US')}`;
+}
+
+/** The model version alone, plus the constants that define it. */
+function printVersion(): void {
+  process.stdout.write(`token radar ${MODEL_VERSION}\n`);
+  process.stdout.write(`model ${MODEL_VERSION}: base multiple ${MODEL.base_multiple}, growth weight ${MODEL.growth_weight}, growth capped at +${MODEL.growth_cap}% over 7 days, age peaks at ${MODEL.age_peak_days} days\n`);
+}
+
+/** Usage, the paths the program reads and writes, and the model in one paragraph. */
+function printUsage(): void {
+  process.stdout.write(`token radar ${MODEL_VERSION} — build the best token launch radar\n`);
+  process.stdout.write(`\n`);
+  process.stdout.write(`Usage:\n`);
+  process.stdout.write(`  node main.ts [--input <snapshot.json|directory>] [--output <directory>]\n`);
+  process.stdout.write(`  node main.ts --help\n`);
+  process.stdout.write(`  node main.ts --version\n`);
+  process.stdout.write(`\n`);
+  process.stdout.write(`Input:\n`);
+  process.stdout.write(`  --input, or /input by default: snapshot.json, the sealed DefiLlama protocol list\n`);
+  process.stdout.write(`  MAKEFUN_OUTPUT_DIR, or /output by default, is where the board goes\n`);
+  process.stdout.write(`\n`);
+  process.stdout.write(`Output:\n`);
+  process.stdout.write(`  board.json: the ranked board, watchlist first, then the early rows\n`);
+  process.stdout.write(`  data.js: the same board for the dashboard, with no network fetch\n`);
+  process.stdout.write(`  dashboard/: the static page, copied unchanged\n`);
+  process.stdout.write(`  screenshots/: the three screenshots, the board, a detail view, a filtered view\n`);
+  process.stdout.write(`  dossier.json: the summary the judge reads, built last\n`);
+  process.stdout.write(`\n`);
+  process.stdout.write(`Model ${MODEL_VERSION}:\n`);
+  process.stdout.write(`  implied value is TVL times ${MODEL.base_multiple}, times a growth multiplier\n`);
+  process.stdout.write(`  that caps the 7-day change at +${MODEL.growth_cap}%, times an age multiplier that\n`);
+  process.stdout.write(`  peaks between ${MODEL.age_young_days} and ${MODEL.age_peak_days} days, times a farmability\n`);
+  process.stdout.write(`  multiplier set by category only, never by name, times a chain multiplier\n`);
+  process.stdout.write(`  of 1 plus 0.01 per chain, capped at 5 chains\n`);
+  process.stdout.write(`\n`);
+  process.stdout.write(`The board never changes the snapshot: it only scores what the snapshot records.\n`);
+}
+
+/** --help and --version answer before any snapshot is read, so they never need /input. */
+if (hasFlag('--help') || hasFlag('-h')) {
+  printUsage();
+  process.exit(0);
+}
+if (hasFlag('--version') || hasFlag('-v')) {
+  printVersion();
+  process.exit(0);
 }
 
 const inputArg = arg('input', '/input');
@@ -89,3 +145,11 @@ process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
+
+/** The run summary, on stderr so the stdout report above stays machine-readable. */
+const topRow = board[0];
+const coveredSlugs = snapshot.watchlist.filter((slug) => board.some((row) => row.slug === slug)).length;
+process.stderr.write(`token radar summary: ${board.length} rows written, ${coveredSlugs} of ${snapshot.watchlist.length} watchlist protocols covered\n`);
+if (topRow !== undefined) {
+  process.stderr.write(`token radar summary: top-ranked ${topRow.slug} at ${formatUsd(topRow.implied_value_usd)} implied value\n`);
+}
